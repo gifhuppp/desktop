@@ -71,15 +71,8 @@ export function enableTextDiffExpansion(): boolean {
   return true
 }
 
-/**
- * Should we allow x64 apps running under ARM translation to auto-update to
- * ARM64 builds?
- */
-export function enableUpdateFromEmulatedX64ToARM64(): boolean {
-  if (__DARWIN__) {
-    return true
-  }
-
+/** Should we allow apps running from Rosetta to auto-update to ARM64 builds? */
+export function enableUpdateFromRosettaToARM64(): boolean {
   return enableBetaFeatures()
 }
 
