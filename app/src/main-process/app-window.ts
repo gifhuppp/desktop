@@ -6,6 +6,7 @@ import {
   autoUpdater,
   nativeTheme,
 } from 'electron'
+import { shell } from '../lib/app-shell'
 import { Emitter, Disposable } from 'event-kit'
 import { encodePathAsUrl } from '../lib/path'
 import {
@@ -25,6 +26,9 @@ import {
   installNotificationCallback,
   terminateDesktopNotifications,
 } from './notifications'
+import { addTrustedIPCSender } from './trusted-ipc-sender'
+import { getUpdaterGUID } from '../lib/get-updater-guid'
+import { CLIAction } from '../lib/cli-action'
 
 export class AppWindow {
   private window: Electron.BrowserWindow
@@ -32,6 +36,7 @@ export class AppWindow {
 
   private _loadTime: number | null = null
   private _rendererReadyTime: number | null = null
+  private isDownloadingUpdate: boolean = false
 
   private minWidth = 960
   private minHeight = 660
@@ -77,6 +82,7 @@ export class AppWindow {
     }
 
     this.window = new BrowserWindow(windowOptions)
+    addTrustedIPCSender(this.window.webContents)
 
     installNotificationCallback(this.window)
 
@@ -84,6 +90,7 @@ export class AppWindow {
     this.shouldMaximizeOnShow = savedWindowState.isMaximized
 
     let quitting = false
+    let quittingEvenIfUpdating = false
     app.on('before-quit', () => {
       quitting = true
     })
@@ -93,7 +100,39 @@ export class AppWindow {
       event.returnValue = true
     })
 
+    ipcMain.on('will-quit-even-if-updating', event => {
+      quitting = true
+      quittingEvenIfUpdating = true
+      event.returnValue = true
+    })
+
+    ipcMain.on('cancel-quitting', event => {
+      quitting = false
+      quittingEvenIfUpdating = false
+      event.returnValue = true
+    })
+
     this.window.on('close', e => {
+      // On macOS, closing the window doesn't mean the app is quitting. If the
+      // app is updating, we will prevent the window from closing only when the
+      // app is also quitting.
+      if (
+        (!__DARWIN__ || quitting) &&
+        !quittingEvenIfUpdating &&
+        this.isDownloadingUpdate
+      ) {
+        e.preventDefault()
+        ipcWebContents.send(this.window.webContents, 'show-installing-update')
+
+        // Make sure the window is visible, so the user can see why we're
+        // preventing the app from quitting. This is important on macOS, where
+        // the window could be hidden/closed when the user tries to quit.
+        // It could also happen on Windows if the user quits the app from the
+        // task bar while it's in the background.
+        this.show()
+        return
+      }
+
       // on macOS, when the user closes the window we really just hide it. This
       // lets us activate quickly and keep all our interesting logic in the
       // renderer.
@@ -102,9 +141,9 @@ export class AppWindow {
         // https://github.com/desktop/desktop/issues/12838
         if (this.window.isFullScreen()) {
           this.window.setFullScreen(false)
-          this.window.once('leave-full-screen', () => app.hide())
+          this.window.once('leave-full-screen', () => this.window.hide())
         } else {
-          app.hide()
+          this.window.hide()
         }
         return
       }
@@ -211,7 +250,7 @@ export class AppWindow {
     return !!this.loadTime && !!this.rendererReadyTime
   }
 
-  public onClose(fn: () => void) {
+  public onClosed(fn: () => void) {
     this.window.on('closed', fn)
   }
 
@@ -274,6 +313,13 @@ export class AppWindow {
     ipcWebContents.send(this.window.webContents, 'url-action', action)
   }
 
+  /** Send the URL action to the renderer. */
+  public sendCLIAction(action: CLIAction) {
+    this.show()
+
+    ipcWebContents.send(this.window.webContents, 'cli-action', action)
+  }
+
   /** Send the app launch timing stats to the renderer. */
   public sendLaunchTimingStats(stats: ILaunchStats) {
     ipcWebContents.send(this.window.webContents, 'launch-timing-stats', stats)
@@ -285,6 +331,32 @@ export class AppWindow {
     if (appMenu) {
       const menu = menuFromElectronMenu(appMenu)
       ipcWebContents.send(this.window.webContents, 'app-menu', menu)
+    }
+  }
+
+  /** Handle when a modal dialog is opened. */
+  public dialogDidOpen() {
+    if (this.window.isFocused()) {
+      // No additional notifications are needed.
+      return
+    }
+    // Care is taken to mimic OS dialog behaviors.
+    if (__DARWIN__) {
+      // macOS beeps when a modal dialog is opened.
+      shell.beep()
+      // See https://developer.apple.com/documentation/appkit/nsapplication/1428358-requestuserattention
+      // "If the inactive app presents a modal panel, this method will be invoked with NSCriticalRequest
+      // automatically. The modal panel is not brought to the front for an inactive app."
+      // NOTE: flashFrame() uses the 'informational' level, so we need to explicitly bounce the dock
+      // with the 'critical' level in order to that described behavior.
+      app.dock.bounce('critical')
+    } else {
+      // See https://learn.microsoft.com/en-us/windows/win32/uxguide/winenv-taskbar#taskbar-button-flashing
+      // "If an inactive program requires immediate attention,
+      // flash its taskbar button to draw attention and leave it highlighted."
+      // It advises not to beep.
+      this.window.once('focus', () => this.window.flashFrame(false))
+      this.window.flashFrame(true)
     }
   }
 
@@ -342,10 +414,12 @@ export class AppWindow {
 
   public setupAutoUpdater() {
     autoUpdater.on('error', (error: Error) => {
+      this.isDownloadingUpdate = false
       ipcWebContents.send(this.window.webContents, 'auto-updater-error', error)
     })
 
     autoUpdater.on('checking-for-update', () => {
+      this.isDownloadingUpdate = false
       ipcWebContents.send(
         this.window.webContents,
         'auto-updater-checking-for-update'
@@ -353,6 +427,7 @@ export class AppWindow {
     })
 
     autoUpdater.on('update-available', () => {
+      this.isDownloadingUpdate = true
       ipcWebContents.send(
         this.window.webContents,
         'auto-updater-update-available'
@@ -360,6 +435,7 @@ export class AppWindow {
     })
 
     autoUpdater.on('update-not-available', () => {
+      this.isDownloadingUpdate = false
       ipcWebContents.send(
         this.window.webContents,
         'auto-updater-update-not-available'
@@ -367,6 +443,7 @@ export class AppWindow {
     })
 
     autoUpdater.on('update-downloaded', () => {
+      this.isDownloadingUpdate = false
       ipcWebContents.send(
         this.window.webContents,
         'auto-updater-update-downloaded'
@@ -374,9 +451,9 @@ export class AppWindow {
     })
   }
 
-  public checkForUpdates(url: string) {
+  public async checkForUpdates(url: string) {
     try {
-      autoUpdater.setFeedURL({ url })
+      autoUpdater.setFeedURL({ url: await trySetUpdaterGuid(url) })
       autoUpdater.checkForUpdates()
     } catch (e) {
       return e
@@ -437,5 +514,20 @@ export class AppWindow {
   public async showOpenDialog(options: Electron.OpenDialogOptions) {
     const { filePaths } = await dialog.showOpenDialog(this.window, options)
     return filePaths.length > 0 ? filePaths[0] : null
+  }
+}
+
+const trySetUpdaterGuid = async (url: string) => {
+  try {
+    const id = await getUpdaterGUID()
+    if (!id) {
+      return url
+    }
+
+    const parsed = new URL(url)
+    parsed.searchParams.set('guid', id)
+    return parsed.toString()
+  } catch (e) {
+    return url
   }
 }
