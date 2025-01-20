@@ -16,6 +16,7 @@ import { ThemeSource } from '../ui/lib/theme-source'
 import { DesktopNotificationPermission } from 'desktop-notifications/dist/notification-permission'
 import { NotificationCallback } from 'desktop-notifications/dist/notification-callback'
 import { DesktopAliveEvent } from './stores/alive-store'
+import { CLIAction } from './cli-action'
 
 /**
  * Defines the simplex IPC channel names we use from the renderer
@@ -25,6 +26,7 @@ import { DesktopAliveEvent } from './stores/alive-store'
  */
 export type RequestChannels = {
   'select-all-window-contents': () => void
+  'dialog-did-open': () => void
   'update-menu-state': (
     state: Array<{ id: MenuIDs; state: IMenuItemState }>
   ) => void
@@ -46,6 +48,8 @@ export type RequestChannels = {
   'menu-event': (name: MenuEvent) => void
   log: (level: LogLevel, message: string) => void
   'will-quit': () => void
+  'will-quit-even-if-updating': () => void
+  'cancel-quitting': () => void
   'crash-ready': () => void
   'crash-quit': () => void
   'window-state-changed': (windowState: WindowState) => void
@@ -54,6 +58,7 @@ export type RequestChannels = {
   'app-menu': (menu: IMenu) => void
   'launch-timing-stats': (stats: ILaunchStats) => void
   'url-action': (action: URLActionType) => void
+  'cli-action': (action: CLIAction) => void
   'certificate-error': (
     certificate: Electron.Certificate,
     error: string,
@@ -63,6 +68,7 @@ export type RequestChannels = {
   blur: () => void
   'update-accounts': (accounts: ReadonlyArray<EndpointToken>) => void
   'quit-and-install-updates': () => void
+  'quit-app': () => void
   'minimize-window': () => void
   'maximize-window': () => void
   'unmaximize-window': () => void
@@ -77,6 +83,9 @@ export type RequestChannels = {
   'focus-window': () => void
   'notification-event': NotificationCallback<DesktopAliveEvent>
   'set-window-zoom-factor': (zoomFactor: number) => void
+  'show-installing-update': () => void
+  'install-windows-cli': () => void
+  'uninstall-windows-cli': () => void
 }
 
 /**

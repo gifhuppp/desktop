@@ -5,11 +5,10 @@ import { truncateWithEllipsis } from '../../lib/truncate-with-ellipsis'
 import { getLogDirectoryPath } from '../../lib/logging/get-log-path'
 import { UNSAFE_openDirectory } from '../shell'
 import { MenuLabelsEvent } from '../../models/menu-labels'
-import { enableSquashMerging } from '../../lib/feature-flag'
 import * as ipcWebContents from '../ipc-webcontents'
 import { mkdir } from 'fs/promises'
+import { buildTestMenu } from './build-test-menu'
 
-const platformDefaultShell = __WIN32__ ? 'Command Prompt' : 'Terminal'
 const createPullRequestLabel = __DARWIN__
   ? 'Create Pull Request'
   : 'Create &pull request'
@@ -32,18 +31,25 @@ enum ZoomDirection {
   Out,
 }
 
+export const separator: Electron.MenuItemConstructorOptions = {
+  type: 'separator',
+}
+
 export function buildDefaultMenu({
   selectedExternalEditor,
   selectedShell,
   askForConfirmationOnForcePush,
   askForConfirmationOnRepositoryRemoval,
   hasCurrentPullRequest = false,
-  defaultBranchName = defaultBranchNameValue,
+  contributionTargetDefaultBranch = defaultBranchNameValue,
   isForcePushForCurrentRepository = false,
   isStashedChangesVisible = false,
   askForConfirmationWhenStashingAllChanges = true,
 }: MenuLabelsEvent): Electron.Menu {
-  defaultBranchName = truncateWithEllipsis(defaultBranchName, 25)
+  contributionTargetDefaultBranch = truncateWithEllipsis(
+    contributionTargetDefaultBranch,
+    25
+  )
 
   const removeRepoLabel = askForConfirmationOnRepositoryRemoval
     ? confirmRepositoryRemovalLabel
@@ -54,7 +60,6 @@ export function buildDefaultMenu({
     : createPullRequestLabel
 
   const template = new Array<Electron.MenuItemConstructorOptions>()
-  const separator: Electron.MenuItemConstructorOptions = { type: 'separator' }
 
   if (__DARWIN__) {
     template.push({
@@ -67,7 +72,7 @@ export function buildDefaultMenu({
         },
         separator,
         {
-          label: 'Preferences…',
+          label: 'Settings…',
           id: 'preferences',
           accelerator: 'CmdOrCtrl+,',
           click: emit('show-preferences'),
@@ -76,7 +81,7 @@ export function buildDefaultMenu({
         {
           label: 'Install Command Line Tool…',
           id: 'install-cli',
-          click: emit('install-cli'),
+          click: emit('install-darwin-cli'),
         },
         separator,
         {
@@ -120,6 +125,7 @@ export function buildDefaultMenu({
 
   if (!__DARWIN__) {
     const fileItems = fileMenu.submenu as Electron.MenuItemConstructorOptions[]
+    const exitAccelerator = __WIN32__ ? 'Alt+F4' : 'CmdOrCtrl+Q'
 
     fileItems.push(
       separator,
@@ -133,7 +139,7 @@ export function buildDefaultMenu({
       {
         role: 'quit',
         label: 'E&xit',
-        accelerator: 'Alt+F4',
+        accelerator: exitAccelerator,
       }
     )
   }
@@ -226,6 +232,22 @@ export function buildDefaultMenu({
         accelerator: 'CmdOrCtrl+-',
         click: zoom(ZoomDirection.Out),
       },
+      {
+        label: __DARWIN__
+          ? 'Expand Active Resizable'
+          : 'Expand active resizable',
+        id: 'increase-active-resizable-width',
+        accelerator: 'CmdOrCtrl+9',
+        click: emit('increase-active-resizable-width'),
+      },
+      {
+        label: __DARWIN__
+          ? 'Contract Active Resizable'
+          : 'Contract active resizable',
+        id: 'decrease-active-resizable-width',
+        accelerator: 'CmdOrCtrl+8',
+        click: emit('decrease-active-resizable-width'),
+      },
       separator,
       {
         label: '&Reload',
@@ -235,8 +257,8 @@ export function buildDefaultMenu({
         // chorded shortcuts, but this menu item is not a user-facing feature
         // so we are going to keep this one around.
         accelerator: 'CmdOrCtrl+Alt+R',
-        click(item: any, focusedWindow: Electron.BrowserWindow | undefined) {
-          if (focusedWindow) {
+        click(item: any, focusedWindow: Electron.BaseWindow | undefined) {
+          if (focusedWindow instanceof BrowserWindow) {
             focusedWindow.reload()
           }
         },
@@ -250,8 +272,8 @@ export function buildDefaultMenu({
         accelerator: (() => {
           return __DARWIN__ ? 'Alt+Command+I' : 'Ctrl+Shift+I'
         })(),
-        click(item: any, focusedWindow: Electron.BrowserWindow | undefined) {
-          if (focusedWindow) {
+        click(item: any, focusedWindow: Electron.BaseWindow | undefined) {
+          if (focusedWindow instanceof BrowserWindow) {
             focusedWindow.webContents.toggleDevTools()
           }
         },
@@ -283,6 +305,12 @@ export function buildDefaultMenu({
         click: emit('pull'),
       },
       {
+        id: 'fetch',
+        label: __DARWIN__ ? 'Fetch' : '&Fetch',
+        accelerator: 'CmdOrCtrl+Shift+T',
+        click: emit('fetch'),
+      },
+      {
         label: removeRepoLabel,
         id: 'remove-repository',
         accelerator: 'CmdOrCtrl+Backspace',
@@ -297,8 +325,8 @@ export function buildDefaultMenu({
       },
       {
         label: __DARWIN__
-          ? `Open in ${selectedShell ?? platformDefaultShell}`
-          : `O&pen in ${selectedShell ?? platformDefaultShell}`,
+          ? `Open in ${selectedShell ?? 'Shell'}`
+          : `O&pen in ${selectedShell ?? 'shell'}`,
         id: 'open-in-shell',
         accelerator: 'Ctrl+`',
         click: emit('open-in-shell'),
@@ -376,11 +404,11 @@ export function buildDefaultMenu({
     separator,
     {
       label: __DARWIN__
-        ? `Update from ${defaultBranchName}`
-        : `&Update from ${defaultBranchName}`,
-      id: 'update-branch',
+        ? `Update from ${contributionTargetDefaultBranch}`
+        : `&Update from ${contributionTargetDefaultBranch}`,
+      id: 'update-branch-with-contribution-target-branch',
       accelerator: 'CmdOrCtrl+Shift+U',
-      click: emit('update-branch'),
+      click: emit('update-branch-with-contribution-target-branch'),
     },
     {
       label: __DARWIN__ ? 'Compare to Branch' : '&Compare to branch',
@@ -396,20 +424,14 @@ export function buildDefaultMenu({
       accelerator: 'CmdOrCtrl+Shift+M',
       click: emit('merge-branch'),
     },
-  ]
-
-  if (enableSquashMerging()) {
-    branchSubmenu.push({
+    {
       label: __DARWIN__
         ? 'Squash and Merge into Current Branch…'
         : 'Squas&h and merge into current branch…',
       id: 'squash-and-merge-branch',
       accelerator: 'CmdOrCtrl+Shift+H',
       click: emit('squash-and-merge-branch'),
-    })
-  }
-
-  branchSubmenu.push(
+    },
     {
       label: __DARWIN__ ? 'Rebase Current Branch…' : 'R&ebase current branch…',
       id: 'rebase-branch',
@@ -429,13 +451,21 @@ export function buildDefaultMenu({
       accelerator: 'CmdOrCtrl+Alt+B',
       click: emit('branch-on-github'),
     },
-    {
-      label: pullRequestLabel,
-      id: 'create-pull-request',
-      accelerator: 'CmdOrCtrl+R',
-      click: emit('open-pull-request'),
-    }
-  )
+  ]
+
+  branchSubmenu.push({
+    label: __DARWIN__ ? 'Preview Pull Request' : 'Preview pull request',
+    id: 'preview-pull-request',
+    accelerator: 'CmdOrCtrl+Alt+P',
+    click: emit('preview-pull-request'),
+  })
+
+  branchSubmenu.push({
+    label: pullRequestLabel,
+    id: 'create-pull-request',
+    accelerator: 'CmdOrCtrl+R',
+    click: emit('open-pull-request'),
+  })
 
   template.push({
     label: __DARWIN__ ? 'Branch' : '&Branch',
@@ -520,45 +550,7 @@ export function buildDefaultMenu({
     showLogsItem,
   ]
 
-  if (__DEV__) {
-    helpItems.push(
-      separator,
-      {
-        label: 'Crash main process…',
-        click() {
-          throw new Error('Boomtown!')
-        },
-      },
-      {
-        label: 'Crash renderer process…',
-        click: emit('boomtown'),
-      },
-      {
-        label: 'Show popup',
-        submenu: [
-          {
-            label: 'Release notes',
-            click: emit('show-release-notes-popup'),
-          },
-          {
-            label: 'Pull Request Check Run Failed',
-            click: emit('pull-request-check-run-failed'),
-          },
-        ],
-      },
-      {
-        label: 'Prune branches',
-        click: emit('test-prune-branches'),
-      }
-    )
-  }
-
-  if (__RELEASE_CHANNEL__ === 'development' || __RELEASE_CHANNEL__ === 'test') {
-    helpItems.push({
-      label: 'Show notification',
-      click: emit('test-show-notification'),
-    })
-  }
+  helpItems.push(...buildTestMenu())
 
   if (__DARWIN__) {
     template.push({
@@ -610,7 +602,7 @@ function getStashedChangesLabel(isStashedChangesVisible: boolean): string {
 
 type ClickHandler = (
   menuItem: Electron.MenuItem,
-  browserWindow: Electron.BrowserWindow | undefined,
+  browserWindow: Electron.BaseWindow | undefined,
   event: Electron.KeyboardEvent
 ) => void
 
@@ -618,14 +610,17 @@ type ClickHandler = (
  * Utility function returning a Click event handler which, when invoked, emits
  * the provided menu event over IPC.
  */
-function emit(name: MenuEvent): ClickHandler {
+export function emit(name: MenuEvent): ClickHandler {
   return (_, focusedWindow) => {
     // focusedWindow can be null if the menu item was clicked without the window
     // being in focus. A simple way to reproduce this is to click on a menu item
     // while in DevTools. Since Desktop only supports one window at a time we
     // can be fairly certain that the first BrowserWindow we find is the one we
     // want.
-    const window = focusedWindow ?? BrowserWindow.getAllWindows()[0]
+    const window =
+      focusedWindow instanceof BrowserWindow
+        ? focusedWindow
+        : BrowserWindow.getAllWindows()[0]
     if (window !== undefined) {
       ipcWebContents.send(window.webContents, 'menu-event', name)
     }
@@ -633,7 +628,7 @@ function emit(name: MenuEvent): ClickHandler {
 }
 
 /** The zoom steps that we support, these factors must sorted */
-const ZoomInFactors = [1, 1.1, 1.25, 1.5, 1.75, 2]
+const ZoomInFactors = [0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2]
 const ZoomOutFactors = ZoomInFactors.slice().reverse()
 
 /**
@@ -654,7 +649,7 @@ function findClosestValue(arr: Array<number>, value: number) {
  */
 function zoom(direction: ZoomDirection): ClickHandler {
   return (menuItem, window) => {
-    if (!window) {
+    if (!(window instanceof BrowserWindow)) {
       return
     }
 

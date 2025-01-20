@@ -17,7 +17,7 @@ import {
   Repository,
 } from '../../models/repository'
 import { Account } from '../../models/account'
-import { IAuthor } from '../../models/author'
+import { Author, UnknownAuthor } from '../../models/author'
 import { List, ClickSource } from '../lib/list'
 import { Checkbox, CheckboxValue } from '../lib/checkbox'
 import {
@@ -27,6 +27,8 @@ import {
   RevealInFileManagerLabel,
   OpenWithDefaultProgramLabel,
   CopyRelativeFilePathLabel,
+  CopySelectedPathsLabel,
+  CopySelectedRelativePathsLabel,
 } from '../lib/context-menu'
 import { CommitMessage } from './commit-message'
 import { ChangedFile } from './changed-file'
@@ -42,30 +44,35 @@ import {
   Foldout,
 } from '../../lib/app-state'
 import { ContinueRebase } from './continue-rebase'
-import { Octicon } from '../octicons'
-import * as OcticonSymbol from '../octicons/octicons.generated'
+import { Octicon, OcticonSymbolVariant } from '../octicons'
+import * as octicons from '../octicons/octicons.generated'
 import { IStashEntry } from '../../models/stash-entry'
 import classNames from 'classnames'
 import { hasWritePermission } from '../../models/github-repository'
 import { hasConflictedFiles } from '../../lib/status'
 import { createObservableRef } from '../lib/observable-ref'
-import { Tooltip, TooltipDirection } from '../lib/tooltip'
+import { TooltipDirection } from '../lib/tooltip'
 import { Popup } from '../../models/popup'
+import { EOL } from 'os'
+import { TooltippedContent } from '../lib/tooltipped-content'
+import { RepoRulesInfo } from '../../models/repo-rules'
+import { IAheadBehind } from '../../models/branch'
+import { StashDiffViewerId } from '../stashing'
 
 const RowHeight = 29
-const StashIcon: OcticonSymbol.OcticonSymbolType = {
+const StashIcon: OcticonSymbolVariant = {
   w: 16,
   h: 16,
-  d:
+  p: [
     'M10.5 1.286h-9a.214.214 0 0 0-.214.214v9a.214.214 0 0 0 .214.214h9a.214.214 0 0 0 ' +
-    '.214-.214v-9a.214.214 0 0 0-.214-.214zM1.5 0h9A1.5 1.5 0 0 1 12 1.5v9a1.5 1.5 0 0 1-1.5 ' +
-    '1.5h-9A1.5 1.5 0 0 1 0 10.5v-9A1.5 1.5 0 0 1 1.5 0zm5.712 7.212a1.714 1.714 0 1 ' +
-    '1-2.424-2.424 1.714 1.714 0 0 1 2.424 2.424zM2.015 12.71c.102.729.728 1.29 1.485 ' +
-    '1.29h9a1.5 1.5 0 0 0 1.5-1.5v-9a1.5 1.5 0 0 0-1.29-1.485v1.442a.216.216 0 0 1 ' +
-    '.004.043v9a.214.214 0 0 1-.214.214h-9a.216.216 0 0 1-.043-.004H2.015zm2 2c.102.729.728 ' +
-    '1.29 1.485 1.29h9a1.5 1.5 0 0 0 1.5-1.5v-9a1.5 1.5 0 0 0-1.29-1.485v1.442a.216.216 0 0 1 ' +
-    '.004.043v9a.214.214 0 0 1-.214.214h-9a.216.216 0 0 1-.043-.004H4.015z',
-  fr: 'evenodd',
+      '.214-.214v-9a.214.214 0 0 0-.214-.214zM1.5 0h9A1.5 1.5 0 0 1 12 1.5v9a1.5 1.5 0 0 1-1.5 ' +
+      '1.5h-9A1.5 1.5 0 0 1 0 10.5v-9A1.5 1.5 0 0 1 1.5 0zm5.712 7.212a1.714 1.714 0 1 ' +
+      '1-2.424-2.424 1.714 1.714 0 0 1 2.424 2.424zM2.015 12.71c.102.729.728 1.29 1.485 ' +
+      '1.29h9a1.5 1.5 0 0 0 1.5-1.5v-9a1.5 1.5 0 0 0-1.29-1.485v1.442a.216.216 0 0 1 ' +
+      '.004.043v9a.214.214 0 0 1-.214.214h-9a.216.216 0 0 1-.043-.004H2.015zm2 2c.102.729.728 ' +
+      '1.29 1.485 1.29h9a1.5 1.5 0 0 0 1.5-1.5v-9a1.5 1.5 0 0 0-1.29-1.485v1.442a.216.216 0 0 1 ' +
+      '.004.043v9a.214.214 0 0 1-.214.214h-9a.216.216 0 0 1-.043-.004H4.015z',
+  ],
 }
 
 const GitIgnoreFileName = '.gitignore'
@@ -128,6 +135,8 @@ interface IChangesListProps {
   readonly onDiscardChanges: (file: WorkingDirectoryFileChange) => void
   readonly askForConfirmationOnDiscardChanges: boolean
   readonly focusCommitMessage: boolean
+  readonly isShowingModal: boolean
+  readonly isShowingFoldout: boolean
   readonly onDiscardChangesFromFiles: (
     files: ReadonlyArray<WorkingDirectoryFileChange>,
     isDiscardingAllChanges: boolean
@@ -140,11 +149,19 @@ interface IChangesListProps {
   readonly changesListScrollTop?: number
 
   /**
-   * Called to open a file it its default application
+   * Called to open a file in its default application
    *
    * @param path The path of the file relative to the root of the repository
    */
   readonly onOpenItem: (path: string) => void
+
+  /**
+   * Called to open a file in the default external editor
+   *
+   * @param path The path of the file relative to the root of the repository
+   */
+  readonly onOpenItemInExternalEditor: (path: string) => void
+
   /**
    * The currently checked out branch (null if no branch is checked out).
    */
@@ -155,6 +172,8 @@ interface IChangesListProps {
   readonly isCommitting: boolean
   readonly commitToAmend: Commit | null
   readonly currentBranchProtected: boolean
+  readonly currentRepoRulesInfo: RepoRulesInfo
+  readonly aheadBehind: IAheadBehind | null
 
   /**
    * Click event handler passed directly to the onRowClick prop of List, see
@@ -185,17 +204,10 @@ interface IChangesListProps {
    * Co-Authored-By commit message trailers depending on whether
    * the user has chosen to do so.
    */
-  readonly coAuthors: ReadonlyArray<IAuthor>
+  readonly coAuthors: ReadonlyArray<Author>
 
   /** The name of the currently selected external editor */
   readonly externalEditorLabel?: string
-
-  /**
-   * Callback to open a selected file using the configured external editor
-   *
-   * @param fullPath The full path to the file on disk
-   */
-  readonly onOpenInExternalEditor: (fullPath: string) => void
 
   readonly stashEntry: IStashEntry | null
 
@@ -208,10 +220,15 @@ interface IChangesListProps {
   readonly shouldNudgeToCommit: boolean
 
   readonly commitSpellcheckEnabled: boolean
+
+  readonly showCommitLengthWarning: boolean
+
+  readonly accounts: ReadonlyArray<Account>
 }
 
 interface IChangesState {
   readonly selectedRows: ReadonlyArray<number>
+  readonly focusedRow: number | null
 }
 
 function getSelectedRowsFromProps(
@@ -235,11 +252,13 @@ export class ChangesList extends React.Component<
   IChangesState
 > {
   private headerRef = createObservableRef<HTMLDivElement>()
+  private includeAllCheckBoxRef = React.createRef<Checkbox>()
 
   public constructor(props: IChangesListProps) {
     super(props)
     this.state = {
       selectedRows: getSelectedRowsFromProps(props),
+      focusedRow: null,
     }
   }
 
@@ -273,6 +292,18 @@ export class ChangesList extends React.Component<
 
     const file = workingDirectory.files[row]
     const selection = file.selection.getSelectionType()
+    const { submoduleStatus } = file.status
+
+    const isUncommittableSubmodule =
+      submoduleStatus !== undefined &&
+      file.status.kind === AppFileStatusKind.Modified &&
+      !submoduleStatus.commitChanged
+
+    const isPartiallyCommittableSubmodule =
+      submoduleStatus !== undefined &&
+      (submoduleStatus.commitChanged ||
+        file.status.kind === AppFileStatusKind.New) &&
+      (submoduleStatus.modifiedChanges || submoduleStatus.untrackedChanges)
 
     const includeAll =
       selection === DiffSelectionType.All
@@ -281,22 +312,31 @@ export class ChangesList extends React.Component<
         ? false
         : null
 
-    const include =
-      rebaseConflictState !== null
-        ? file.status.kind !== AppFileStatusKind.Untracked
-        : includeAll
+    const include = isUncommittableSubmodule
+      ? false
+      : rebaseConflictState !== null
+      ? file.status.kind !== AppFileStatusKind.Untracked
+      : includeAll
 
-    const disableSelection = isCommitting || rebaseConflictState !== null
+    const disableSelection =
+      isCommitting || rebaseConflictState !== null || isUncommittableSubmodule
+
+    const checkboxTooltip = isUncommittableSubmodule
+      ? 'This submodule change cannot be added to a commit in this repository because it contains changes that have not been committed.'
+      : isPartiallyCommittableSubmodule
+      ? 'Only changes that have been committed within the submodule will be added to this repository. You need to commit any other modified or untracked changes in the submodule before including them in this repository.'
+      : undefined
 
     return (
       <ChangedFile
         file={file}
-        include={include}
+        include={isPartiallyCommittableSubmodule && include ? null : include}
         key={file.id}
-        onContextMenu={this.onItemContextMenu}
         onIncludeChanged={onIncludeChanged}
         availableWidth={availableWidth}
         disableSelection={disableSelection}
+        checkboxTooltip={checkboxTooltip}
+        focused={this.state.focusedRow === row}
       />
     )
   }
@@ -426,6 +466,32 @@ export class ChangesList extends React.Component<
     }
   }
 
+  private getCopySelectedPathsMenuItem = (
+    files: WorkingDirectoryFileChange[]
+  ): IMenuItem => {
+    return {
+      label: CopySelectedPathsLabel,
+      action: () => {
+        const fullPaths = files.map(file =>
+          Path.join(this.props.repository.path, file.path)
+        )
+        clipboard.writeText(fullPaths.join(EOL))
+      },
+    }
+  }
+
+  private getCopySelectedRelativePathsMenuItem = (
+    files: WorkingDirectoryFileChange[]
+  ): IMenuItem => {
+    return {
+      label: CopySelectedRelativePathsLabel,
+      action: () => {
+        const paths = files.map(file => Path.normalize(file.path))
+        clipboard.writeText(paths.join(EOL))
+      },
+    }
+  }
+
   private getRevealInFileManagerMenuItem = (
     file: WorkingDirectoryFileChange
   ): IMenuItem => {
@@ -440,7 +506,7 @@ export class ChangesList extends React.Component<
     file: WorkingDirectoryFileChange,
     enabled: boolean
   ): IMenuItem => {
-    const { externalEditorLabel, repository } = this.props
+    const { externalEditorLabel } = this.props
 
     const openInExternalEditor = externalEditorLabel
       ? `Open in ${externalEditorLabel}`
@@ -449,8 +515,7 @@ export class ChangesList extends React.Component<
     return {
       label: openInExternalEditor,
       action: () => {
-        const fullPath = Path.join(repository.path, file.path)
-        this.props.onOpenInExternalEditor(fullPath)
+        this.props.onOpenItemInExternalEditor(file.path)
       },
       enabled,
     }
@@ -498,13 +563,37 @@ export class ChangesList extends React.Component<
       { type: 'separator' },
     ]
     if (paths.length === 1) {
+      const enabled = Path.basename(path) !== GitIgnoreFileName
       items.push({
         label: __DARWIN__
           ? 'Ignore File (Add to .gitignore)'
           : 'Ignore file (add to .gitignore)',
         action: () => this.props.onIgnoreFile(path),
-        enabled: Path.basename(path) !== GitIgnoreFileName,
+        enabled,
       })
+
+      // Even on Windows, the path separator is '/' for git operations so cannot
+      // use Path.sep
+      const pathComponents = path.split('/').slice(0, -1)
+      if (pathComponents.length > 0) {
+        const submenu = pathComponents.map((_, index) => {
+          const label = `/${pathComponents
+            .slice(0, pathComponents.length - index)
+            .join('/')}`
+          return {
+            label,
+            action: () => this.props.onIgnoreFile(label),
+          }
+        })
+
+        items.push({
+          label: __DARWIN__
+            ? 'Ignore Folder (Add to .gitignore)'
+            : 'Ignore folder (add to .gitignore)',
+          submenu,
+          enabled,
+        })
+      }
     } else if (paths.length > 1) {
       items.push({
         label: __DARWIN__
@@ -556,15 +645,21 @@ export class ChangesList extends React.Component<
               this.props.onIncludeChanged(file.path, false)
             )
           },
-        }
+        },
+        { type: 'separator' },
+        this.getCopySelectedPathsMenuItem(selectedFiles),
+        this.getCopySelectedRelativePathsMenuItem(selectedFiles)
+      )
+    } else {
+      items.push(
+        { type: 'separator' },
+        this.getCopyPathMenuItem(file),
+        this.getCopyRelativePathMenuItem(file)
       )
     }
 
     const enabled = status.kind !== AppFileStatusKind.Deleted
     items.push(
-      { type: 'separator' },
-      this.getCopyPathMenuItem(file),
-      this.getCopyRelativePathMenuItem(file),
       { type: 'separator' },
       this.getRevealInFileManagerMenuItem(file),
       this.getOpenInExternalEditorMenuItem(file, enabled),
@@ -613,9 +708,12 @@ export class ChangesList extends React.Component<
   }
 
   private onItemContextMenu = (
-    file: WorkingDirectoryFileChange,
+    row: number,
     event: React.MouseEvent<HTMLDivElement>
   ) => {
+    const { workingDirectory } = this.props
+    const file = workingDirectory.files[row]
+
     if (this.props.isCommitting) {
       return
     }
@@ -670,6 +768,7 @@ export class ChangesList extends React.Component<
       isCommitting,
       commitToAmend,
       currentBranchProtected,
+      currentRepoRulesInfo: currentRepoRulesInfo,
     } = this.props
 
     if (rebaseConflictState !== null) {
@@ -720,7 +819,10 @@ export class ChangesList extends React.Component<
       <CommitMessage
         onCreateCommit={this.props.onCreateCommit}
         branch={this.props.branch}
+        mostRecentLocalCommit={this.props.mostRecentLocalCommit}
         commitAuthor={this.props.commitAuthor}
+        isShowingModal={this.props.isShowingModal}
+        isShowingFoldout={this.props.isShowingFoldout}
         anyFilesSelected={anyFilesSelected}
         anyFilesAvailable={fileCount > 0}
         repository={repository}
@@ -739,11 +841,17 @@ export class ChangesList extends React.Component<
         prepopulateCommitSummary={prepopulateCommitSummary}
         key={repository.id}
         showBranchProtected={fileCount > 0 && currentBranchProtected}
+        repoRulesInfo={currentRepoRulesInfo}
+        aheadBehind={this.props.aheadBehind}
         showNoWriteAccess={fileCount > 0 && !hasWritePermissionForRepository}
         shouldNudge={this.props.shouldNudgeToCommit}
         commitSpellcheckEnabled={this.props.commitSpellcheckEnabled}
+        showCommitLengthWarning={this.props.showCommitLengthWarning}
         onCoAuthorsUpdated={this.onCoAuthorsUpdated}
         onShowCoAuthoredByChanged={this.onShowCoAuthoredByChanged}
+        onConfirmCommitWithUnknownCoAuthors={
+          this.onConfirmCommitWithUnknownCoAuthors
+        }
         onPersistCommitMessage={this.onPersistCommitMessage}
         onCommitMessageFocusSet={this.onCommitMessageFocusSet}
         onRefreshAuthor={this.onRefreshAuthor}
@@ -752,16 +860,25 @@ export class ChangesList extends React.Component<
         onCommitSpellcheckEnabledChanged={this.onCommitSpellcheckEnabledChanged}
         onStopAmending={this.onStopAmending}
         onShowCreateForkDialog={this.onShowCreateForkDialog}
+        accounts={this.props.accounts}
       />
     )
   }
 
-  private onCoAuthorsUpdated = (coAuthors: ReadonlyArray<IAuthor>) =>
+  private onCoAuthorsUpdated = (coAuthors: ReadonlyArray<Author>) =>
     this.props.dispatcher.setCoAuthors(this.props.repository, coAuthors)
 
   private onShowCoAuthoredByChanged = (showCoAuthors: boolean) => {
     const { dispatcher, repository } = this.props
     dispatcher.setShowCoAuthoredBy(repository, showCoAuthors)
+  }
+
+  private onConfirmCommitWithUnknownCoAuthors = (
+    coAuthors: ReadonlyArray<UnknownAuthor>,
+    onCommitAnyway: () => void
+  ) => {
+    const { dispatcher } = this.props
+    dispatcher.showUnknownAuthorsCommitWarning(coAuthors, onCommitAnyway)
   }
 
   private onRefreshAuthor = () =>
@@ -795,10 +912,10 @@ export class ChangesList extends React.Component<
       dispatcher.selectWorkingDirectoryFiles(repository)
 
       // If the button is clicked, that implies the stash was not restored or discarded
-      dispatcher.recordNoActionTakenOnStash()
+      dispatcher.incrementMetric('noActionTakenOnStashCount')
     } else {
       dispatcher.selectStashedFile(repository)
-      dispatcher.recordStashView()
+      dispatcher.incrementMetric('stashViewCount')
     }
   }
 
@@ -817,13 +934,22 @@ export class ChangesList extends React.Component<
         className={className}
         onClick={this.onStashEntryClicked}
         tabIndex={0}
-        aria-selected={this.props.isShowingStashEntry}
+        aria-expanded={this.props.isShowingStashEntry}
+        aria-controls={
+          this.props.isShowingStashEntry ? StashDiffViewerId : undefined
+        }
       >
         <Octicon className="stack-icon" symbol={StashIcon} />
         <div className="text">Stashed Changes</div>
-        <Octicon symbol={OcticonSymbol.chevronRight} />
+        <Octicon symbol={octicons.chevronRight} />
       </button>
     )
+  }
+
+  private onRowDoubleClick = (row: number) => {
+    const file = this.props.workingDirectory.files[row]
+
+    this.props.onOpenItemInExternalEditor(file.path)
   }
 
   private onRowKeyDown = (
@@ -842,6 +968,10 @@ export class ChangesList extends React.Component<
     return
   }
 
+  public focus() {
+    this.includeAllCheckBoxRef.current?.focus()
+  }
+
   public render() {
     const { workingDirectory, rebaseConflictState, isCommitting } = this.props
     const { files } = workingDirectory
@@ -853,7 +983,7 @@ export class ChangesList extends React.Component<
       file => file.selection.getSelectionType() !== DiffSelectionType.None
     ).length
     const totalFilesPlural = files.length === 1 ? 'file' : 'files'
-    const selectedChangesDescription = `${selectedChangeCount}/${files.length} changed ${totalFilesPlural} selected`
+    const selectedChangesDescription = `${selectedChangeCount}/${files.length} changed ${totalFilesPlural} included`
 
     const includeAllValue = getIncludeAllValue(
       workingDirectory,
@@ -864,42 +994,68 @@ export class ChangesList extends React.Component<
       files.length === 0 || isCommitting || rebaseConflictState !== null
 
     return (
-      <div className="changes-list-container file-list">
-        <div
-          className="header"
-          onContextMenu={this.onContextMenu}
-          ref={this.headerRef}
-        >
-          <Tooltip target={this.headerRef} direction={TooltipDirection.NORTH}>
-            {selectedChangesDescription}
-          </Tooltip>
-          <Checkbox
-            label={filesDescription}
-            value={includeAllValue}
-            onChange={this.onIncludeAllChanged}
-            disabled={disableAllCheckbox}
+      <>
+        <div className="changes-list-container file-list">
+          <div
+            className="header"
+            onContextMenu={this.onContextMenu}
+            ref={this.headerRef}
+          >
+            <TooltippedContent
+              tooltip={selectedChangesDescription}
+              direction={TooltipDirection.NORTH}
+              openOnFocus={true}
+            >
+              <Checkbox
+                ref={this.includeAllCheckBoxRef}
+                label={filesDescription}
+                value={includeAllValue}
+                onChange={this.onIncludeAllChanged}
+                disabled={disableAllCheckbox}
+                ariaDescribedBy="changesDescription"
+              />
+            </TooltippedContent>
+            <div className="sr-only" id="changesDescription">
+              {selectedChangesDescription}
+            </div>
+          </div>
+          <List
+            id="changes-list"
+            rowCount={files.length}
+            rowHeight={RowHeight}
+            rowRenderer={this.renderRow}
+            selectedRows={this.state.selectedRows}
+            selectionMode="multi"
+            onSelectionChanged={this.props.onFileSelectionChanged}
+            invalidationProps={{
+              workingDirectory: workingDirectory,
+              isCommitting: isCommitting,
+              focusedRow: this.state.focusedRow,
+            }}
+            onRowClick={this.props.onRowClick}
+            onRowDoubleClick={this.onRowDoubleClick}
+            onRowKeyboardFocus={this.onRowFocus}
+            onRowBlur={this.onRowBlur}
+            onScroll={this.onScroll}
+            setScrollTop={this.props.changesListScrollTop}
+            onRowKeyDown={this.onRowKeyDown}
+            onRowContextMenu={this.onItemContextMenu}
+            ariaLabel={filesDescription}
           />
         </div>
-        <List
-          id="changes-list"
-          rowCount={files.length}
-          rowHeight={RowHeight}
-          rowRenderer={this.renderRow}
-          selectedRows={this.state.selectedRows}
-          selectionMode="multi"
-          onSelectionChanged={this.props.onFileSelectionChanged}
-          invalidationProps={{
-            workingDirectory: workingDirectory,
-            isCommitting: isCommitting,
-          }}
-          onRowClick={this.props.onRowClick}
-          onScroll={this.onScroll}
-          setScrollTop={this.props.changesListScrollTop}
-          onRowKeyDown={this.onRowKeyDown}
-        />
         {this.renderStashedChanges()}
         {this.renderCommitMessageForm()}
-      </div>
+      </>
     )
+  }
+
+  private onRowFocus = (row: number) => {
+    this.setState({ focusedRow: row })
+  }
+
+  private onRowBlur = (row: number) => {
+    if (this.state.focusedRow === row) {
+      this.setState({ focusedRow: null })
+    }
   }
 }

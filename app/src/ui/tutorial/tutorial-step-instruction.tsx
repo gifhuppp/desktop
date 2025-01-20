@@ -1,10 +1,12 @@
+/* eslint-disable jsx-a11y/no-noninteractive-element-interactions */
+/* eslint-disable jsx-a11y/click-events-have-key-events */
 import * as React from 'react'
 import {
   ValidTutorialStep,
   orderedTutorialSteps,
 } from '../../models/tutorial-step'
 import { Octicon } from '../octicons'
-import * as OcticonSymbol from '../octicons/octicons.generated'
+import * as octicons from '../octicons/octicons.generated'
 
 interface ITutorialStepInstructionsProps {
   /** Text displayed to summarize this step */
@@ -56,7 +58,7 @@ export class TutorialStepInstructions extends React.Component<ITutorialStepInstr
           {shouldShowSkipLink ? (
             this.props.skipLinkButton
           ) : (
-            <Octicon symbol={OcticonSymbol.chevronDown} />
+            <Octicon symbol={octicons.chevronDown} />
           )}
         </span>
       </summary>
@@ -67,7 +69,7 @@ export class TutorialStepInstructions extends React.Component<ITutorialStepInstr
     if (this.props.isComplete(this.props.sectionId)) {
       return (
         <div className="green-circle">
-          <Octicon symbol={OcticonSymbol.check} />
+          <Octicon symbol={octicons.check} />
         </div>
       )
     }

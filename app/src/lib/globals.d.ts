@@ -44,8 +44,6 @@ declare const __RELEASE_CHANNEL__:
   | 'test'
   | 'development'
 
-declare const __CLI_COMMANDS__: ReadonlyArray<string>
-
 /** The URL for Squirrel's updates. */
 declare const __UPDATES_URL__: string
 
@@ -162,6 +160,8 @@ interface Window {
 
 interface HTMLDialogElement {
   showModal: () => void
+  close: (returnValue?: string | undefined) => void
+  open: boolean
 }
 /**
  * Obtain the number of elements of a tuple type

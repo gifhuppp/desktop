@@ -16,6 +16,7 @@ import { RelativeTime } from '../relative-time'
 import { assertNever } from '../../lib/fatal-error'
 import { ReleaseNotesUri } from '../lib/releases'
 import { encodePathAsUrl } from '../../lib/path'
+import { isOSNoLongerSupportedByElectron } from '../../lib/get-os'
 
 const logoPath = __DARWIN__
   ? 'static/logo-64x64@2x.png'
@@ -25,7 +26,7 @@ const DesktopLogo = encodePathAsUrl(__dirname, logoPath)
 interface IAboutProps {
   /**
    * Event triggered when the dialog is dismissed by the user in the
-   * ways described in the Dialog component's dismissable prop.
+   * ways described in the Dialog component's dismissible prop.
    */
   readonly onDismissed: () => void
 
@@ -44,8 +45,8 @@ interface IAboutProps {
    */
   readonly applicationArchitecture: string
 
-  /** A function to call to kick off an update check. */
-  readonly onCheckForUpdates: () => void
+  /** A function to call to kick off a non-staggered update check. */
+  readonly onCheckForNonStaggeredUpdates: () => void
 
   readonly onShowAcknowledgements: () => void
 
@@ -114,15 +115,21 @@ export class About extends React.Component<IAboutProps, IAboutState> {
       case UpdateStatus.CheckingForUpdates:
       case UpdateStatus.UpdateAvailable:
       case UpdateStatus.UpdateNotChecked:
-        const disabled = ![
-          UpdateStatus.UpdateNotChecked,
-          UpdateStatus.UpdateNotAvailable,
-        ].includes(updateStatus)
+        const disabled =
+          ![
+            UpdateStatus.UpdateNotChecked,
+            UpdateStatus.UpdateNotAvailable,
+          ].includes(updateStatus) || isOSNoLongerSupportedByElectron()
+
+        const buttonTitle = 'Check for Updates'
 
         return (
           <Row>
-            <Button disabled={disabled} onClick={this.props.onCheckForUpdates}>
-              Check for Updates
+            <Button
+              disabled={disabled}
+              onClick={this.props.onCheckForNonStaggeredUpdates}
+            >
+              {buttonTitle}
             </Button>
           </Row>
         )
@@ -220,6 +227,18 @@ export class About extends React.Component<IAboutProps, IAboutState> {
       return null
     }
 
+    if (isOSNoLongerSupportedByElectron()) {
+      return (
+        <DialogError>
+          This operating system is no longer supported. Software updates have
+          been disabled.{' '}
+          <LinkButton uri="https://docs.github.com/en/desktop/installing-and-configuring-github-desktop/overview/supported-operating-systems">
+            Supported operating systems
+          </LinkButton>
+        </DialogError>
+      )
+    }
+
     if (!this.state.updateState.lastSuccessfulCheck) {
       return (
         <DialogError>
@@ -259,10 +278,12 @@ export class About extends React.Component<IAboutProps, IAboutState> {
     )
 
     const versionText = __DEV__ ? `Build ${version}` : `Version ${version}`
+    const titleId = 'Dialog_about'
 
     return (
       <Dialog
         id="about"
+        titleId={titleId}
         onSubmit={this.props.onDismissed}
         onDismissed={this.props.onDismissed}
       >
@@ -276,19 +297,19 @@ export class About extends React.Component<IAboutProps, IAboutState> {
               height="64"
             />
           </Row>
-          <h2>{name}</h2>
+          <h1 id={titleId}>About {name}</h1>
           <p className="no-padding">
             <span className="selectable-text">
               {versionText} ({this.props.applicationArchitecture})
             </span>{' '}
             ({releaseNotesLink})
           </p>
-          <p className="no-padding">
+          <p className="no-padding terms-and-license">
             <LinkButton onClick={this.props.onShowTermsAndConditions}>
               Terms and Conditions
             </LinkButton>
           </p>
-          <p>
+          <p className="terms-and-license">
             <LinkButton onClick={this.props.onShowAcknowledgements}>
               License and Open Source Notices
             </LinkButton>
